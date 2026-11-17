@@ -124,7 +124,31 @@ async function seedModules() {
   }
 }
 
+// Spec 011: an example student enrolled in the example module. Idempotent: it reuses the user and
+// the ACTIVE enrollment when they exist. Like the example teacher, it starts with the seed password.
+async function seedEnrollments() {
+  const module = await prisma.module.findFirst({ where: { name: 'Cálculo I (ejemplo)', deletedAt: null } });
+  if (!module) return;
+  const student = await prisma.user.upsert({
+    where: { email: 'estudiante.ejemplo@uts.edu.co' },
+    update: {},
+    create: {
+      email: 'estudiante.ejemplo@uts.edu.co',
+      passwordHash: await argon2.hash(password!),
+      role: 'STUDENT',
+      emailVerifiedAt: new Date(),
+      mustChangePassword: true,
+      studentProfile: { create: { firstName: 'Estudiante', lastName: 'Ejemplo' } },
+    },
+  });
+  const enrolled = await prisma.enrollment.findFirst({
+    where: { studentId: student.id, moduleId: module.id, status: 'ACTIVE', deletedAt: null },
+  });
+  if (!enrolled) await prisma.enrollment.create({ data: { studentId: student.id, moduleId: module.id } });
+}
+
 main()
   .then(seedConfiguration)
   .then(seedModules)
+  .then(seedEnrollments)
   .finally(() => prisma.$disconnect());
