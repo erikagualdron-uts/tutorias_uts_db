@@ -56,6 +56,75 @@ async function seedConfiguration() {
   }
 }
 
+// Example data for development (spec 010): holidays of the example period and one module with its
+// weekly sessions. Skipped when the tables already have rows.
+async function seedModules() {
+  if ((await prisma.holiday.count({ where: { deletedAt: null } })) === 0) {
+    const holidays: [string, string][] = [
+      ['2026-08-17', 'Asunción de la Virgen'],
+      ['2026-10-12', 'Día de la Raza'],
+      ['2026-11-02', 'Día de Todos los Santos'],
+      ['2026-11-16', 'Independencia de Cartagena'],
+      ['2026-12-08', 'Inmaculada Concepción'],
+      ['2026-12-25', 'Navidad'],
+      ['2027-01-01', 'Año Nuevo'],
+      ['2027-01-11', 'Día de los Reyes Magos'],
+    ];
+    await prisma.holiday.createMany({
+      data: holidays.map(([date, name]) => ({ date: new Date(`${date}T00:00:00Z`), name })),
+    });
+  }
+  if ((await prisma.module.count({ where: { deletedAt: null } })) > 0) return;
+  const period = await prisma.academicPeriod.findFirst({ where: { status: 'ACTIVE', deletedAt: null } });
+  const room = await prisma.room.findFirst({ where: { name: 'A-101', deletedAt: null } });
+  if (!period || !room) return;
+  const teacher = await prisma.user.upsert({
+    where: { email: 'docente.ejemplo@correo.uts.edu.co' },
+    update: {},
+    create: {
+      email: 'docente.ejemplo@correo.uts.edu.co',
+      passwordHash: await argon2.hash(password!),
+      role: 'TEACHER',
+      emailVerifiedAt: new Date(),
+      mustChangePassword: true,
+      teacherProfile: { create: { firstName: 'Docente', lastName: 'Ejemplo' } },
+    },
+  });
+  // Tuesdays 14:00-16:00 in Bogota (UTC-5), from the first Tuesday of the period, without holidays.
+  const holidayDays = new Set((await prisma.holiday.findMany()).map((h) => h.date.toISOString().slice(0, 10)));
+  const module = await prisma.module.create({
+    data: {
+      periodId: period.id,
+      teacherId: teacher.id,
+      roomId: room.id,
+      name: 'Cálculo I (ejemplo)',
+      description: 'Módulo de ejemplo para desarrollo.',
+      schedules: {
+        create: { periodId: period.id, teacherId: teacher.id, roomId: room.id, dayOfWeek: 2, startMinute: 840, endMinute: 960 },
+      },
+    },
+    include: { schedules: true },
+  });
+  const day = new Date(period.startsOn);
+  day.setUTCDate(day.getUTCDate() + ((2 - day.getUTCDay() + 7) % 7));
+  for (; day <= period.endsOn; day.setUTCDate(day.getUTCDate() + 7)) {
+    if (holidayDays.has(day.toISOString().slice(0, 10))) continue;
+    const startsAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 19));
+    await prisma.moduleSession.create({
+      data: {
+        moduleId: module.id,
+        scheduleId: module.schedules[0]!.id,
+        teacherId: teacher.id,
+        roomId: room.id,
+        originalStartsAt: startsAt,
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 2 * 3_600_000),
+      },
+    });
+  }
+}
+
 main()
   .then(seedConfiguration)
+  .then(seedModules)
   .finally(() => prisma.$disconnect());
