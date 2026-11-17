@@ -53,6 +53,7 @@ model User {
   teacherProfile TeacherProfile?
   sessions       Session[]
   codes          VerificationCode[]
+  taughtModules  Module[]
 
   @@map("users")
 }
@@ -188,6 +189,8 @@ model AcademicPeriod {
   updatedAt DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt DateTime?       @map("deleted_at") @db.Timestamptz(6)
 
+  modules Module[]
+
   @@map("academic_periods")
 }
 
@@ -214,6 +217,7 @@ model Room {
   deletedAt  DateTime?  @map("deleted_at") @db.Timestamptz(6)
 
   location Location @relation(fields: [locationId], references: [id])
+  modules  Module[]
 
   @@index([locationId])
   @@map("rooms")
@@ -248,4 +252,141 @@ model DropdownItem {
 
   @@index([listId, sortOrder])
   @@map("dropdown_items")
+}
+
+enum SessionStatus {
+  SCHEDULED
+  RESCHEDULED
+  CANCELLED
+
+  @@map("session_status")
+}
+
+enum SessionCancelReason {
+  HOLIDAY
+
+  @@map("session_cancel_reason")
+}
+
+enum HolidaySource {
+  MANUAL
+  IMPORTED
+
+  @@map("holiday_source")
+}
+
+enum OutboxEventType {
+  MODULE_TEACHER_CHANGED
+  MODULE_ROOM_CHANGED
+  SESSIONS_CANCELLED_HOLIDAY
+  SESSIONS_RESTORED_HOLIDAY
+
+  @@map("outbox_event_type")
+}
+
+// A tutoring module of one academic period (spec 010). The capacity (cupo) is never stored: it is
+// the capacity of `room`. The module has no status of its own: it is live while deletedAt is null.
+model Module {
+  id          String    @id @default(uuid()) @db.Uuid
+  periodId    String    @map("period_id") @db.Uuid
+  name        String    @db.VarChar(120)
+  description String?   @db.VarChar(1000)
+  teacherId   String    @map("teacher_id") @db.Uuid
+  roomId      String    @map("room_id") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  period    AcademicPeriod   @relation(fields: [periodId], references: [id])
+  teacher   User             @relation(fields: [teacherId], references: [id])
+  room      Room             @relation(fields: [roomId], references: [id])
+  schedules ModuleSchedule[]
+  sessions  ModuleSession[]
+  events    OutboxEvent[]
+
+  @@index([periodId])
+  @@index([teacherId])
+  @@index([roomId])
+  @@map("modules")
+}
+
+// Weekly slot in local America/Bogota time. periodId, teacherId and roomId are copies of the
+// module's values so the exclusion constraints (migration SQL) can see them; the service keeps
+// them in sync in the same transaction that changes the module.
+model ModuleSchedule {
+  id          String    @id @default(uuid()) @db.Uuid
+  moduleId    String    @map("module_id") @db.Uuid
+  periodId    String    @map("period_id") @db.Uuid
+  teacherId   String    @map("teacher_id") @db.Uuid
+  roomId      String    @map("room_id") @db.Uuid
+  dayOfWeek   Int       @map("day_of_week") @db.SmallInt
+  startMinute Int       @map("start_minute") @db.SmallInt
+  endMinute   Int       @map("end_minute") @db.SmallInt
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  module   Module          @relation(fields: [moduleId], references: [id])
+  sessions ModuleSession[]
+
+  @@index([moduleId])
+  @@map("module_schedules")
+}
+
+// One weekly occurrence of a module. teacherId and roomId are the ones that give this session;
+// changing them on the module only updates sessions that start in the future.
+model ModuleSession {
+  id               String               @id @default(uuid()) @db.Uuid
+  moduleId         String               @map("module_id") @db.Uuid
+  scheduleId       String               @map("schedule_id") @db.Uuid
+  teacherId        String               @map("teacher_id") @db.Uuid
+  roomId           String               @map("room_id") @db.Uuid
+  originalStartsAt DateTime             @map("original_starts_at") @db.Timestamptz(6)
+  startsAt         DateTime             @map("starts_at") @db.Timestamptz(6)
+  endsAt           DateTime             @map("ends_at") @db.Timestamptz(6)
+  status           SessionStatus        @default(SCHEDULED)
+  cancelReason     SessionCancelReason? @map("cancel_reason")
+  holidayId        String?              @map("holiday_id") @db.Uuid
+  createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt        DateTime?            @map("deleted_at") @db.Timestamptz(6)
+
+  module   Module         @relation(fields: [moduleId], references: [id])
+  schedule ModuleSchedule @relation(fields: [scheduleId], references: [id])
+  holiday  Holiday?       @relation(fields: [holidayId], references: [id])
+
+  @@index([moduleId, startsAt])
+  @@index([startsAt])
+  @@map("module_sessions")
+}
+
+// A calendar day (America/Bogota) with no tutoring. Global: it applies to every period.
+model Holiday {
+  id        String        @id @default(uuid()) @db.Uuid
+  date      DateTime      @db.Date
+  name      String        @db.VarChar(120)
+  source    HolidaySource @default(MANUAL)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime?     @map("deleted_at") @db.Timestamptz(6)
+
+  sessions ModuleSession[]
+
+  @@map("holidays")
+}
+
+// Events the notifications feature (spec 013) sends later. Written in the same transaction as the
+// change; a log, so it has no updatedAt or deletedAt.
+model OutboxEvent {
+  id          String          @id @default(uuid()) @db.Uuid
+  type        OutboxEventType
+  moduleId    String          @map("module_id") @db.Uuid
+  payload     Json
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  processedAt DateTime?       @map("processed_at") @db.Timestamptz(6)
+
+  module Module @relation(fields: [moduleId], references: [id])
+
+  @@index([processedAt, createdAt])
+  @@map("outbox_events")
 }
