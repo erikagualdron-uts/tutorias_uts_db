@@ -144,3 +144,108 @@ model SmtpConfig {
 
   @@map("smtp_configs")
 }
+
+enum PeriodStatus {
+  UPCOMING
+  ACTIVE
+  CLOSED
+
+  @@map("period_status")
+}
+
+enum PeriodClosedBy {
+  MANUAL
+  AUTOMATIC
+
+  @@map("period_closed_by")
+}
+
+enum RoomStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("room_status")
+}
+
+enum ItemStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("item_status")
+}
+
+// startsOn/endsOn are calendar days in America/Bogota. The partial unique indexes, the exclusion
+// constraint and the CHECKs live only in the migration SQL (Prisma cannot model them).
+model AcademicPeriod {
+  id        String          @id @default(uuid()) @db.Uuid
+  name      String          @db.VarChar(50)
+  startsOn  DateTime        @map("starts_on") @db.Date
+  endsOn    DateTime        @map("ends_on") @db.Date
+  status    PeriodStatus    @default(UPCOMING)
+  closedAt  DateTime?       @map("closed_at") @db.Timestamptz(6)
+  closedBy  PeriodClosedBy? @map("closed_by")
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime?       @map("deleted_at") @db.Timestamptz(6)
+
+  @@map("academic_periods")
+}
+
+model Location {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String    @db.VarChar(80)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  rooms Room[]
+
+  @@map("locations")
+}
+
+model Room {
+  id         String     @id @default(uuid()) @db.Uuid
+  locationId String     @map("location_id") @db.Uuid
+  name       String     @db.VarChar(40)
+  capacity   Int
+  status     RoomStatus @default(ACTIVE)
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt  DateTime?  @map("deleted_at") @db.Timestamptz(6)
+
+  location Location @relation(fields: [locationId], references: [id])
+
+  @@index([locationId])
+  @@map("rooms")
+}
+
+// Lists are created by migrations only; the API manages their items.
+model DropdownList {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  nameEs    String   @map("name_es")
+  nameEn    String   @map("name_en")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  items DropdownItem[]
+
+  @@map("dropdown_lists")
+}
+
+model DropdownItem {
+  id        String     @id @default(uuid()) @db.Uuid
+  listId    String     @map("list_id") @db.Uuid
+  labelEs   String     @map("label_es") @db.VarChar(80)
+  labelEn   String     @map("label_en") @db.VarChar(80)
+  sortOrder Int        @map("sort_order")
+  status    ItemStatus @default(ACTIVE)
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime?  @map("deleted_at") @db.Timestamptz(6)
+
+  list DropdownList @relation(fields: [listId], references: [id])
+
+  @@index([listId, sortOrder])
+  @@map("dropdown_items")
+}
