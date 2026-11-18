@@ -54,6 +54,7 @@ model User {
   sessions       Session[]
   codes          VerificationCode[]
   taughtModules  Module[]
+  enrollments    Enrollment[]
 
   @@map("users")
 }
@@ -297,12 +298,13 @@ model Module {
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  period    AcademicPeriod   @relation(fields: [periodId], references: [id])
-  teacher   User             @relation(fields: [teacherId], references: [id])
-  room      Room             @relation(fields: [roomId], references: [id])
-  schedules ModuleSchedule[]
-  sessions  ModuleSession[]
-  events    OutboxEvent[]
+  period      AcademicPeriod   @relation(fields: [periodId], references: [id])
+  teacher     User             @relation(fields: [teacherId], references: [id])
+  room        Room             @relation(fields: [roomId], references: [id])
+  schedules   ModuleSchedule[]
+  sessions    ModuleSession[]
+  events      OutboxEvent[]
+  enrollments Enrollment[]
 
   @@index([periodId])
   @@index([teacherId])
@@ -351,9 +353,10 @@ model ModuleSession {
   updatedAt        DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt        DateTime?            @map("deleted_at") @db.Timestamptz(6)
 
-  module   Module         @relation(fields: [moduleId], references: [id])
-  schedule ModuleSchedule @relation(fields: [scheduleId], references: [id])
-  holiday  Holiday?       @relation(fields: [holidayId], references: [id])
+  module   Module           @relation(fields: [moduleId], references: [id])
+  schedule ModuleSchedule   @relation(fields: [scheduleId], references: [id])
+  holiday  Holiday?         @relation(fields: [holidayId], references: [id])
+  absences SessionAbsence[]
 
   @@index([moduleId, startsAt])
   @@index([startsAt])
@@ -389,4 +392,47 @@ model OutboxEvent {
 
   @@index([processedAt, createdAt])
   @@map("outbox_events")
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  CANCELLED
+}
+
+// A student's enrollment in a module (spec 011). One ACTIVE per student and module (partial unique
+// index and CHECK in the migration SQL). effectiveUntil keeps sessions starting before it.
+model Enrollment {
+  id             String           @id @default(uuid()) @db.Uuid
+  studentId      String           @map("student_id") @db.Uuid
+  moduleId       String           @map("module_id") @db.Uuid
+  status         EnrollmentStatus @default(ACTIVE)
+  cancelledAt    DateTime?        @map("cancelled_at") @db.Timestamptz(6)
+  effectiveUntil DateTime?        @map("effective_until") @db.Timestamptz(6)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt      DateTime?        @map("deleted_at") @db.Timestamptz(6)
+
+  student  User             @relation(fields: [studentId], references: [id])
+  module   Module           @relation(fields: [moduleId], references: [id])
+  absences SessionAbsence[]
+
+  @@index([moduleId, status])
+  @@index([studentId, status])
+  @@map("enrollments")
+}
+
+// The student stays enrolled but skips one session; deletedAt marks that it was restored.
+model SessionAbsence {
+  id           String    @id @default(uuid()) @db.Uuid
+  enrollmentId String    @map("enrollment_id") @db.Uuid
+  sessionId    String    @map("session_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  enrollment Enrollment    @relation(fields: [enrollmentId], references: [id])
+  session    ModuleSession @relation(fields: [sessionId], references: [id])
+
+  @@index([sessionId])
+  @@map("session_absences")
 }
