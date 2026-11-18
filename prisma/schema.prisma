@@ -1,0 +1,392 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  SUPERADMIN
+  TEACHER
+  STUDENT
+
+  @@map("role")
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("user_status")
+}
+
+enum Locale {
+  es
+  en
+
+  @@map("locale")
+}
+
+enum VerificationPurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+
+  @@map("verification_purpose")
+}
+
+// email is stored already normalized (lowercase, trimmed); a soft-deleted user keeps the email taken.
+model User {
+  id                 String     @id @default(uuid()) @db.Uuid
+  email              String     @unique
+  passwordHash       String     @map("password_hash")
+  role               Role
+  status             UserStatus @default(ACTIVE)
+  emailVerifiedAt    DateTime?  @map("email_verified_at") @db.Timestamptz(6)
+  mustChangePassword Boolean    @default(false) @map("must_change_password")
+  locale             Locale     @default(es)
+  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt          DateTime?  @map("deleted_at") @db.Timestamptz(6)
+
+  studentProfile StudentProfile?
+  teacherProfile TeacherProfile?
+  sessions       Session[]
+  codes          VerificationCode[]
+  taughtModules  Module[]
+
+  @@map("users")
+}
+
+model StudentProfile {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid
+  firstName String   @map("first_name")
+  lastName  String   @map("last_name")
+  program   String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("student_profiles")
+}
+
+model TeacherProfile {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid
+  firstName String   @map("first_name")
+  lastName  String   @map("last_name")
+  phone     String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("teacher_profiles")
+}
+
+// One row per device. Only the hash of the opaque refresh token is stored.
+model Session {
+  id                       String    @id @default(uuid()) @db.Uuid
+  userId                   String    @map("user_id") @db.Uuid
+  refreshTokenHash         String    @unique @map("refresh_token_hash")
+  // Hash of the token just rotated out; presenting it again means the token was stolen or replayed.
+  previousRefreshTokenHash String?   @unique @map("previous_refresh_token_hash")
+  deviceLabel              String?   @map("device_label")
+  lastUsedAt               DateTime  @default(now()) @map("last_used_at") @db.Timestamptz(6)
+  expiresAt                DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt                DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt                DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model VerificationCode {
+  id        String              @id @default(uuid()) @db.Uuid
+  userId    String              @map("user_id") @db.Uuid
+  purpose   VerificationPurpose
+  codeHash  String              @map("code_hash")
+  expiresAt DateTime            @map("expires_at") @db.Timestamptz(6)
+  attempts  Int                 @default(0)
+  usedAt    DateTime?           @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, purpose])
+  @@map("verification_codes")
+}
+
+model Setting {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  value     Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("settings")
+}
+
+model SmtpConfig {
+  id                String   @id @default(uuid()) @db.Uuid
+  host              String
+  port              Int
+  user              String
+  passwordEncrypted String   @map("password_encrypted")
+  from              String
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("smtp_configs")
+}
+
+enum PeriodStatus {
+  UPCOMING
+  ACTIVE
+  CLOSED
+
+  @@map("period_status")
+}
+
+enum PeriodClosedBy {
+  MANUAL
+  AUTOMATIC
+
+  @@map("period_closed_by")
+}
+
+enum RoomStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("room_status")
+}
+
+enum ItemStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("item_status")
+}
+
+// startsOn/endsOn are calendar days in America/Bogota. The partial unique indexes, the exclusion
+// constraint and the CHECKs live only in the migration SQL (Prisma cannot model them).
+model AcademicPeriod {
+  id        String          @id @default(uuid()) @db.Uuid
+  name      String          @db.VarChar(50)
+  startsOn  DateTime        @map("starts_on") @db.Date
+  endsOn    DateTime        @map("ends_on") @db.Date
+  status    PeriodStatus    @default(UPCOMING)
+  closedAt  DateTime?       @map("closed_at") @db.Timestamptz(6)
+  closedBy  PeriodClosedBy? @map("closed_by")
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime?       @map("deleted_at") @db.Timestamptz(6)
+
+  modules Module[]
+
+  @@map("academic_periods")
+}
+
+model Location {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String    @db.VarChar(80)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  rooms Room[]
+
+  @@map("locations")
+}
+
+model Room {
+  id         String     @id @default(uuid()) @db.Uuid
+  locationId String     @map("location_id") @db.Uuid
+  name       String     @db.VarChar(40)
+  capacity   Int
+  status     RoomStatus @default(ACTIVE)
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt  DateTime?  @map("deleted_at") @db.Timestamptz(6)
+
+  location Location @relation(fields: [locationId], references: [id])
+  modules  Module[]
+
+  @@index([locationId])
+  @@map("rooms")
+}
+
+// Lists are created by migrations only; the API manages their items.
+model DropdownList {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  nameEs    String   @map("name_es")
+  nameEn    String   @map("name_en")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  items DropdownItem[]
+
+  @@map("dropdown_lists")
+}
+
+model DropdownItem {
+  id        String     @id @default(uuid()) @db.Uuid
+  listId    String     @map("list_id") @db.Uuid
+  labelEs   String     @map("label_es") @db.VarChar(80)
+  labelEn   String     @map("label_en") @db.VarChar(80)
+  sortOrder Int        @map("sort_order")
+  status    ItemStatus @default(ACTIVE)
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime?  @map("deleted_at") @db.Timestamptz(6)
+
+  list DropdownList @relation(fields: [listId], references: [id])
+
+  @@index([listId, sortOrder])
+  @@map("dropdown_items")
+}
+
+enum SessionStatus {
+  SCHEDULED
+  RESCHEDULED
+  CANCELLED
+
+  @@map("session_status")
+}
+
+enum SessionCancelReason {
+  HOLIDAY
+
+  @@map("session_cancel_reason")
+}
+
+enum HolidaySource {
+  MANUAL
+  IMPORTED
+
+  @@map("holiday_source")
+}
+
+enum OutboxEventType {
+  MODULE_TEACHER_CHANGED
+  MODULE_ROOM_CHANGED
+  SESSIONS_CANCELLED_HOLIDAY
+  SESSIONS_RESTORED_HOLIDAY
+
+  @@map("outbox_event_type")
+}
+
+// A tutoring module of one academic period (spec 010). The capacity (cupo) is never stored: it is
+// the capacity of `room`. The module has no status of its own: it is live while deletedAt is null.
+model Module {
+  id          String    @id @default(uuid()) @db.Uuid
+  periodId    String    @map("period_id") @db.Uuid
+  name        String    @db.VarChar(120)
+  description String?   @db.VarChar(1000)
+  teacherId   String    @map("teacher_id") @db.Uuid
+  roomId      String    @map("room_id") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  period    AcademicPeriod   @relation(fields: [periodId], references: [id])
+  teacher   User             @relation(fields: [teacherId], references: [id])
+  room      Room             @relation(fields: [roomId], references: [id])
+  schedules ModuleSchedule[]
+  sessions  ModuleSession[]
+  events    OutboxEvent[]
+
+  @@index([periodId])
+  @@index([teacherId])
+  @@index([roomId])
+  @@map("modules")
+}
+
+// Weekly slot in local America/Bogota time. periodId, teacherId and roomId are copies of the
+// module's values so the exclusion constraints (migration SQL) can see them; the service keeps
+// them in sync in the same transaction that changes the module.
+model ModuleSchedule {
+  id          String    @id @default(uuid()) @db.Uuid
+  moduleId    String    @map("module_id") @db.Uuid
+  periodId    String    @map("period_id") @db.Uuid
+  teacherId   String    @map("teacher_id") @db.Uuid
+  roomId      String    @map("room_id") @db.Uuid
+  dayOfWeek   Int       @map("day_of_week") @db.SmallInt
+  startMinute Int       @map("start_minute") @db.SmallInt
+  endMinute   Int       @map("end_minute") @db.SmallInt
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  module   Module          @relation(fields: [moduleId], references: [id])
+  sessions ModuleSession[]
+
+  @@index([moduleId])
+  @@map("module_schedules")
+}
+
+// One weekly occurrence of a module. teacherId and roomId are the ones that give this session;
+// changing them on the module only updates sessions that start in the future.
+model ModuleSession {
+  id               String               @id @default(uuid()) @db.Uuid
+  moduleId         String               @map("module_id") @db.Uuid
+  scheduleId       String               @map("schedule_id") @db.Uuid
+  teacherId        String               @map("teacher_id") @db.Uuid
+  roomId           String               @map("room_id") @db.Uuid
+  originalStartsAt DateTime             @map("original_starts_at") @db.Timestamptz(6)
+  startsAt         DateTime             @map("starts_at") @db.Timestamptz(6)
+  endsAt           DateTime             @map("ends_at") @db.Timestamptz(6)
+  status           SessionStatus        @default(SCHEDULED)
+  cancelReason     SessionCancelReason? @map("cancel_reason")
+  holidayId        String?              @map("holiday_id") @db.Uuid
+  createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt        DateTime?            @map("deleted_at") @db.Timestamptz(6)
+
+  module   Module         @relation(fields: [moduleId], references: [id])
+  schedule ModuleSchedule @relation(fields: [scheduleId], references: [id])
+  holiday  Holiday?       @relation(fields: [holidayId], references: [id])
+
+  @@index([moduleId, startsAt])
+  @@index([startsAt])
+  @@map("module_sessions")
+}
+
+// A calendar day (America/Bogota) with no tutoring. Global: it applies to every period.
+model Holiday {
+  id        String        @id @default(uuid()) @db.Uuid
+  date      DateTime      @db.Date
+  name      String        @db.VarChar(120)
+  source    HolidaySource @default(MANUAL)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime?     @map("deleted_at") @db.Timestamptz(6)
+
+  sessions ModuleSession[]
+
+  @@map("holidays")
+}
+
+// Events the notifications feature (spec 013) sends later. Written in the same transaction as the
+// change; a log, so it has no updatedAt or deletedAt.
+model OutboxEvent {
+  id          String          @id @default(uuid()) @db.Uuid
+  type        OutboxEventType
+  moduleId    String          @map("module_id") @db.Uuid
+  payload     Json
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  processedAt DateTime?       @map("processed_at") @db.Timestamptz(6)
+
+  module Module @relation(fields: [moduleId], references: [id])
+
+  @@index([processedAt, createdAt])
+  @@map("outbox_events")
+}
