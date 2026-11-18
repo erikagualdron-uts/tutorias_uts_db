@@ -265,6 +265,7 @@ enum SessionStatus {
 
 enum SessionCancelReason {
   HOLIDAY
+  TEACHER
 
   @@map("session_cancel_reason")
 }
@@ -281,6 +282,9 @@ enum OutboxEventType {
   MODULE_ROOM_CHANGED
   SESSIONS_CANCELLED_HOLIDAY
   SESSIONS_RESTORED_HOLIDAY
+  SESSION_RESCHEDULED
+  SESSION_CANCELLED_TEACHER
+  SESSION_RESTORED_TEACHER
 
   @@map("outbox_event_type")
 }
@@ -360,6 +364,8 @@ model ModuleSession {
 
   @@index([moduleId, startsAt])
   @@index([startsAt])
+  @@index([roomId, startsAt])
+  @@index([teacherId, startsAt])
   @@map("module_sessions")
 }
 
