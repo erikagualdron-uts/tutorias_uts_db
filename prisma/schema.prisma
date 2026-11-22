@@ -49,16 +49,18 @@ model User {
   updatedAt          DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt          DateTime?  @map("deleted_at") @db.Timestamptz(6)
 
-  studentProfile StudentProfile?
-  teacherProfile TeacherProfile?
-  sessions       Session[]
-  codes          VerificationCode[]
-  taughtModules  Module[]
-  enrollments    Enrollment[]
-  notifications  Notification[]
-  pushTokens     PushToken[]
-  pqrs           Pqrs[]
-  pqrsMessages   PqrsMessage[]
+  studentProfile  StudentProfile?
+  teacherProfile  TeacherProfile?
+  sessions        Session[]
+  codes           VerificationCode[]
+  taughtModules   Module[]
+  enrollments     Enrollment[]
+  notifications   Notification[]
+  pushTokens      PushToken[]
+  pqrs            Pqrs[]
+  pqrsMessages    PqrsMessage[]
+  chatMemberships ConversationMember[]
+  chatMessages    Message[]
 
   @@map("users")
 }
@@ -319,6 +321,7 @@ model Module {
   events        OutboxEvent[]
   enrollments   Enrollment[]
   notifications Notification[]
+  conversation  Conversation?
 
   @@index([periodId])
   @@index([teacherId])
@@ -597,4 +600,72 @@ model PqrsMessage {
 
   @@index([pqrsId, createdAt])
   @@map("pqrs_messages")
+}
+
+enum ConversationType {
+  DIRECT
+  MODULE
+
+  @@map("conversation_type")
+}
+
+enum MessageKind {
+  TEXT
+  ANNOUNCEMENT
+
+  @@map("message_kind")
+}
+
+// A chat: between two people (DIRECT, one per pair) or of a module (MODULE, one per module, created on
+// demand). Who may see and write is derived from enrollments, never copied (spec 018).
+model Conversation {
+  id            String           @id @default(uuid()) @db.Uuid
+  type          ConversationType
+  moduleId      String?          @unique @map("module_id") @db.Uuid
+  directKey     String?          @unique @map("direct_key") @db.VarChar(73)
+  lastMessageAt DateTime?        @map("last_message_at") @db.Timestamptz(6)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt     DateTime?        @map("deleted_at") @db.Timestamptz(6)
+
+  module   Module?              @relation(fields: [moduleId], references: [id], onDelete: Restrict)
+  members  ConversationMember[]
+  messages Message[]
+
+  @@index([lastMessageAt(sort: Desc)])
+  @@map("conversations")
+}
+
+// Where each person stopped reading; the unread count comes from lastReadAt.
+model ConversationMember {
+  conversationId String    @map("conversation_id") @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  lastReadAt     DateTime? @map("last_read_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@id([conversationId, userId])
+  @@index([userId])
+  @@map("conversation_members")
+}
+
+// clientMessageId makes a retried send return the same row instead of creating another.
+model Message {
+  id              String      @id @default(uuid()) @db.Uuid
+  conversationId  String      @map("conversation_id") @db.Uuid
+  senderId        String      @map("sender_id") @db.Uuid
+  kind            MessageKind @default(TEXT)
+  body            String      @db.VarChar(4000)
+  clientMessageId String      @map("client_message_id") @db.Uuid
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  deletedAt       DateTime?   @map("deleted_at") @db.Timestamptz(6)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Restrict)
+
+  @@unique([conversationId, senderId, clientMessageId])
+  @@index([conversationId, createdAt(sort: Desc), id(sort: Desc)])
+  @@map("messages")
 }
