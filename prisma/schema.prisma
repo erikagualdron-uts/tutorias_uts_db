@@ -57,6 +57,8 @@ model User {
   enrollments    Enrollment[]
   notifications  Notification[]
   pushTokens     PushToken[]
+  pqrs           Pqrs[]
+  pqrsMessages   PqrsMessage[]
 
   @@map("users")
 }
@@ -253,6 +255,7 @@ model DropdownItem {
   deletedAt DateTime?  @map("deleted_at") @db.Timestamptz(6)
 
   list DropdownList @relation(fields: [listId], references: [id])
+  pqrs Pqrs[]
 
   @@index([listId, sortOrder])
   @@map("dropdown_items")
@@ -288,6 +291,9 @@ enum OutboxEventType {
   SESSION_RESCHEDULED
   SESSION_CANCELLED_TEACHER
   SESSION_RESTORED_TEACHER
+  PQRS_IN_REVIEW
+  PQRS_RESPONDED
+  PQRS_RESOLVED
 
   @@map("outbox_event_type")
 }
@@ -393,12 +399,14 @@ model Holiday {
 model OutboxEvent {
   id          String          @id @default(uuid()) @db.Uuid
   type        OutboxEventType
-  moduleId    String          @map("module_id") @db.Uuid
+  moduleId    String?         @map("module_id") @db.Uuid
+  pqrsId      String?         @map("pqrs_id") @db.Uuid
   payload     Json
   createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
   processedAt DateTime?       @map("processed_at") @db.Timestamptz(6)
 
-  module        Module         @relation(fields: [moduleId], references: [id])
+  module        Module?        @relation(fields: [moduleId], references: [id], onDelete: Restrict)
+  pqrs          Pqrs?          @relation(fields: [pqrsId], references: [id], onDelete: Restrict)
   notifications Notification[]
 
   @@index([processedAt, createdAt])
@@ -436,7 +444,8 @@ model Notification {
   userId    String          @map("user_id") @db.Uuid
   eventId   String          @map("event_id") @db.Uuid
   type      OutboxEventType
-  moduleId  String          @map("module_id") @db.Uuid
+  moduleId  String?         @map("module_id") @db.Uuid
+  pqrsId    String?         @map("pqrs_id") @db.Uuid
   locale    Locale
   title     String          @db.VarChar(160)
   body      String          @db.VarChar(1000)
@@ -446,7 +455,8 @@ model Notification {
 
   user       User                   @relation(fields: [userId], references: [id])
   event      OutboxEvent            @relation(fields: [eventId], references: [id])
-  module     Module                 @relation(fields: [moduleId], references: [id])
+  module     Module?                @relation(fields: [moduleId], references: [id], onDelete: Restrict)
+  pqrs       Pqrs?                  @relation(fields: [pqrsId], references: [id], onDelete: Restrict)
   deliveries NotificationDelivery[]
 
   @@unique([eventId, userId])
@@ -533,4 +543,58 @@ model SessionAbsence {
 
   @@index([sessionId])
   @@map("session_absences")
+}
+
+enum PqrsStatus {
+  FILED
+  IN_REVIEW
+  RESOLVED
+
+  @@map("pqrs_status")
+}
+
+// A request, complaint, claim or suggestion filed by a teacher or a student (spec 017). Only the CAE
+// moves it forward: FILED -> IN_REVIEW -> RESOLVED, and it needs one reply to be resolved.
+// `clientRequestId` makes a retried filing return the same row instead of creating another.
+model Pqrs {
+  id              String     @id @default(uuid()) @db.Uuid
+  authorId        String     @map("author_id") @db.Uuid
+  typeId          String     @map("type_id") @db.Uuid
+  subject         String     @db.VarChar(200)
+  description     String     @db.VarChar(4000)
+  status          PqrsStatus @default(FILED)
+  clientRequestId String     @map("client_request_id") @db.Uuid
+  reviewedAt      DateTime?  @map("reviewed_at") @db.Timestamptz(6)
+  resolvedAt      DateTime?  @map("resolved_at") @db.Timestamptz(6)
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime?  @map("deleted_at") @db.Timestamptz(6)
+
+  author        User           @relation(fields: [authorId], references: [id])
+  type          DropdownItem   @relation(fields: [typeId], references: [id])
+  messages      PqrsMessage[]
+  events        OutboxEvent[]
+  notifications Notification[]
+
+  @@unique([authorId, clientRequestId])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([authorId, createdAt(sort: Desc)])
+  @@index([typeId])
+  @@map("pqrs")
+}
+
+// A reply of the CAE inside a PQRS.
+model PqrsMessage {
+  id        String    @id @default(uuid()) @db.Uuid
+  pqrsId    String    @map("pqrs_id") @db.Uuid
+  authorId  String    @map("author_id") @db.Uuid
+  body      String    @db.VarChar(4000)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  pqrs   Pqrs @relation(fields: [pqrsId], references: [id])
+  author User @relation(fields: [authorId], references: [id])
+
+  @@index([pqrsId, createdAt])
+  @@map("pqrs_messages")
 }
