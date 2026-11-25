@@ -61,6 +61,7 @@ model User {
   pqrsMessages    PqrsMessage[]
   chatMemberships ConversationMember[]
   chatMessages    Message[]
+  nameChanges     StudentNameChange[]
 
   @@map("users")
 }
@@ -503,6 +504,22 @@ model PushToken {
   session Session @relation(fields: [sessionId], references: [id])
 
   @@map("push_tokens")
+}
+
+// Write-once record of each student name change (spec 033): never edited, never deleted.
+model StudentNameChange {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  previousFirstName String   @map("previous_first_name")
+  previousLastName  String   @map("previous_last_name")
+  newFirstName      String   @map("new_first_name")
+  newLastName       String   @map("new_last_name")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@map("student_name_changes")
 }
 
 enum EnrollmentStatus {
